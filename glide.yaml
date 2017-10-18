@@ -1,0 +1,4 @@
+package: github.com/enablecloud/kube-app-operator
+import:
+- package: k8s.io/client-go
+  version: master
