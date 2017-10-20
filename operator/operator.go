@@ -16,6 +16,7 @@ limitations under the License.
 package kubeappoperator
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
@@ -24,6 +25,7 @@ import (
 
 	"github.com/derekparker/delve/pkg/config"
 	crv1 "github.com/enablecloud/kube-app-operator/apis/cr/v1"
+	"k8s.io/api/apps/v1beta2"
 	"k8s.io/api/core/v1"
 	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
@@ -43,7 +45,7 @@ import (
 const maxRetries = 5
 
 type Handler interface {
-	Init(c *config.Config) error
+	Init(c *config.Config, kube kubernetes.Interface) error
 	ObjectCreated(obj interface{})
 	ObjectDeleted(obj interface{})
 	ObjectUpdated(oldObj, newObj interface{})
@@ -456,19 +458,58 @@ func watchAppFolder(clientkub kubernetes.Interface, client *rest.RESTClient, eve
 // Default handler implements Handler interface,
 // print each event with JSON format
 type Default struct {
+	config    *config.Config
+	clientkub kubernetes.Interface
 }
 
 // Init initializes handler configuration
 // Do nothing for default handler
-func (d *Default) Init(c *config.Config) error {
+func (d *Default) Init(conf *config.Config, clientb kubernetes.Interface) error {
+	d.config = conf
+	d.clientkub = clientb
 	return nil
+
 }
 
 func (d *Default) ObjectCreated(obj interface{}) {
 	fmt.Println("Processing change to ObjectCreated %s", obj)
+	//deploymentsClient := d.clientkub.AppsV1beta2().Deployments(v1.NamespaceDefault)
+	_, ok := obj.(crv1.AppFolder)
+	if ok {
+		for i, v := range obj.(crv1.AppFolder).Spec.List.Items {
+			objet := v.Object
+
+			if objet.GetObjectKind().GroupVersionKind().Kind == "Deployment" {
+				fmt.Println("YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY")
+				fmt.Println("YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY")
+				fmt.Println("YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY")
+				fmt.Println("YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY")
+				deploymentsClient := d.clientkub.AppsV1beta2().Deployments(v1.NamespaceDefault)
+				data, _ := json.Marshal(v)
+				new := v1beta2.Deployment{}
+				err := json.Unmarshal(data, &new)
+
+				result, err := deploymentsClient.Create(&new)
+				if err != nil {
+					panic(err)
+				}
+				fmt.Printf("Created deployment %q.\n", result.GetObjectMeta().GetName())
+			}
+			fmt.Println("Array Loop", i, v)
+		}
+	}
+	// index is the index where we are
+	// element is the element from someSlice for where we are
+	//result, err := deploymentsClient.Create(obj.(crv1.AppFolder).Spec.List.Items[0].Object)
+	//if err != nil {
+	//	panic(err)
+	//}
+	//fmt.Printf("Created deployment %q.\n", result.GetObjectMeta().GetName())
+
 }
 
 func (d *Default) ObjectDeleted(obj interface{}) {
+
 	fmt.Println("Processing change to ObjectCreated %s", obj)
 }
 
