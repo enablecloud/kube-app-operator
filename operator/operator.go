@@ -23,9 +23,12 @@ import (
 	"time"
 
 	"github.com/derekparker/delve/pkg/config"
+	crv1 "github.com/enablecloud/kube-app-operator/apis/cr/v1"
 	"k8s.io/api/core/v1"
 	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/serializer"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apimachinery/pkg/watch"
@@ -34,6 +37,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/workqueue"
+	"k8s.io/kubernetes/pkg/api"
 )
 
 const maxRetries = 5
@@ -88,7 +92,7 @@ func GetClientOutOfCluster() kubernetes.Interface {
 	return clientset
 }
 
-func Start(conf *config.Config, eventHandler Handler) {
+func Start(conf *config.Config, cfg *rest.Config, eventHandler Handler) {
 	kubeClient := GetClientOutOfCluster()
 
 	c := newControllerPod(kubeClient, eventHandler)
@@ -97,6 +101,20 @@ func Start(conf *config.Config, eventHandler Handler) {
 
 	go c.Run(stopCh)
 
+	// make a new config for our extension's API group, using the first config as a baseline
+	appClient, appScheme, err := NewClient(cfg)
+	if err != nil {
+		panic(err)
+	}
+
+	// start a controller on instances of our custom resource
+	controller := AppFolderController{
+		AppFolderClient: appClient,
+		AppFolderScheme: appScheme,
+	}
+	fmt.Println(controller.AppFolderScheme)
+	appF := watchAppFolder(kubeClient, appClient, eventHandler)
+	go appF.Run(stopCh)
 	sigterm := make(chan os.Signal, 1)
 	signal.Notify(sigterm, syscall.SIGTERM)
 	signal.Notify(sigterm, syscall.SIGINT)
@@ -126,6 +144,31 @@ func Start(conf *config.Config, eventHandler Handler) {
 	//logrus.Fatal(http.ListenAndServe(":8081", nil))
 }
 
+func NewClient(cfg *rest.Config) (*rest.RESTClient, *runtime.Scheme, error) {
+	scheme := runtime.NewScheme()
+	if err := crv1.AddToScheme(scheme); err != nil {
+		return nil, nil, err
+	}
+
+	config := *cfg
+	config.GroupVersion = &crv1.SchemeGroupVersion
+	config.APIPath = "/apis"
+	config.ContentType = runtime.ContentTypeJSON
+	config.NegotiatedSerializer = serializer.DirectCodecFactory{CodecFactory: serializer.NewCodecFactory(scheme)}
+
+	client, err := rest.RESTClientFor(&config)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return client, scheme, nil
+}
+
+type AppFolderController struct {
+	AppFolderClient *rest.RESTClient
+	AppFolderScheme *runtime.Scheme
+}
+
 func newControllerPod(client kubernetes.Interface, eventHandler Handler) *Controller {
 	queue := workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter())
 
@@ -142,7 +185,6 @@ func newControllerPod(client kubernetes.Interface, eventHandler Handler) *Contro
 		0, //Skip resync
 		cache.Indexers{},
 	)
-
 	informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			key, err := cache.MetaNamespaceKeyFunc(obj)
@@ -246,6 +288,52 @@ func (c *Controller) processItem(key string) error {
 
 	c.eventHandler.ObjectCreated(obj)
 	return nil
+}
+
+func watchAppFolder(clientkub kubernetes.Interface, client *rest.RESTClient, eventHandler Handler) *Controller {
+
+	//Define what we want to look for (Services)
+	watchlist := cache.NewListWatchFromClient(client, "appfolders", api.NamespaceAll, fields.Everything())
+	fmt.Println("depart")
+	fmt.Println(watchlist)
+	fmt.Println("fin")
+	queue := workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter())
+	//	resyncPeriod := 30 * time.Minute
+
+	//Setup an informer to call functions when the watchlist changes
+	informer := cache.NewSharedIndexInformer(
+		watchlist,
+		&crv1.AppFolder{},
+		0, //Skip resync
+		cache.Indexers{},
+	)
+	informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc: func(obj interface{}) {
+			key, err := cache.MetaNamespaceKeyFunc(obj)
+			if err == nil {
+				queue.Add(key)
+			}
+		},
+		UpdateFunc: func(old, new interface{}) {
+			key, err := cache.MetaNamespaceKeyFunc(new)
+			if err == nil {
+				queue.Add(key)
+			}
+		},
+		DeleteFunc: func(obj interface{}) {
+			key, err := cache.DeletionHandlingMetaNamespaceKeyFunc(obj)
+			if err == nil {
+				queue.Add(key)
+			}
+		},
+	})
+
+	return &Controller{
+		clientset:    clientkub,
+		informer:     informer,
+		queue:        queue,
+		eventHandler: eventHandler,
+	}
 }
 
 //
@@ -377,13 +465,13 @@ func (d *Default) Init(c *config.Config) error {
 }
 
 func (d *Default) ObjectCreated(obj interface{}) {
-
+	fmt.Println("Processing change to ObjectCreated %s", obj)
 }
 
 func (d *Default) ObjectDeleted(obj interface{}) {
-
+	fmt.Println("Processing change to ObjectCreated %s", obj)
 }
 
 func (d *Default) ObjectUpdated(oldObj, newObj interface{}) {
-
+	fmt.Println("Processing change to ObjectCreated %s", newObj)
 }

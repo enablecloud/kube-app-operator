@@ -17,26 +17,54 @@ limitations under the License.
 package main
 
 import (
+	"flag"
 	"fmt"
 
 	"github.com/derekparker/delve/pkg/config"
 	kubeappoperator "github.com/enablecloud/kube-app-operator/operator"
-
 	"github.com/golang/example/stringutil"
+	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
 func main() {
+	fmt.Println("Start")
 	conf := &config.Config{}
 	var eventHandler kubeappoperator.Handler
 	eventHandler = new(kubeappoperator.Default)
-	//switch {
-	//case len(conf.Handler.Slack.Channel) > 0 || len(conf.Handler.Slack.Token) > 0:
-	//	eventHandler = new(slack.Slack)
-	//default:
-	//	eventHandler = new(handlers.Default)
-	//}
 
-	kubeappoperator.Start(conf, eventHandler)
+	kubeconfig := flag.String("kubeconfig", "", "Path to a kube config. Only required if out-of-cluster.")
+	flag.Parse() // Create the client config. Use kubeconfig if given, otherwise assume in-cluster.
+	config, err := buildConfig(*kubeconfig)
+	if err != nil {
+		panic(err)
+	}
+
+	apiextensionsclientset, err := apiextensionsclient.NewForConfig(config)
+	if err != nil {
+		panic(err)
+	}
+
+	// initialize custom resource using a CustomResourceDefinition if it does not exist
+	crd, err := kubeappoperator.CreateCustomResourceDefinition(apiextensionsclientset)
+	if err != nil && !apierrors.IsAlreadyExists(err) {
+		panic(err)
+	}
+
+	if crd != nil {
+		defer apiextensionsclientset.ApiextensionsV1beta1().CustomResourceDefinitions().Delete(crd.Name, nil)
+	}
+
+	kubeappoperator.Start(conf, config, eventHandler)
 	fmt.Println(stringutil.Reverse("!selpmaxe oG ,olleH"))
 
+}
+
+func buildConfig(kubeconfig string) (*rest.Config, error) {
+	if kubeconfig != "" {
+		return clientcmd.BuildConfigFromFlags("", kubeconfig)
+	}
+	return rest.InClusterConfig()
 }
