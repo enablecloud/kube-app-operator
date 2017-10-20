@@ -20,15 +20,15 @@ import (
 	"fmt"
 
 	"github.com/derekparker/delve/pkg/config"
-	"github.com/enablecloud/kube-app-operator/operator"
+	kubeappoperator "github.com/enablecloud/kube-app-operator/operator"
 
 	"github.com/golang/example/stringutil"
 )
 
 func main() {
 	conf := &config.Config{}
-	var eventHandler enablecloud.Handler
-	eventHandler = new(enablecloud.Default)
+	var eventHandler kubeappoperator.Handler
+	eventHandler = new(kubeappoperator.Default)
 	//switch {
 	//case len(conf.Handler.Slack.Channel) > 0 || len(conf.Handler.Slack.Token) > 0:
 	//	eventHandler = new(slack.Slack)
@@ -36,7 +36,7 @@ func main() {
 	//	eventHandler = new(handlers.Default)
 	//}
 
-	enablecloud.Start(conf, eventHandler)
+	kubeappoperator.Start(conf, eventHandler)
 	fmt.Println(stringutil.Reverse("!selpmaxe oG ,olleH"))
 
 }
