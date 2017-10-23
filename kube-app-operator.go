@@ -33,7 +33,6 @@ func main() {
 	fmt.Println("Start")
 	conf := &config.Config{}
 	var eventHandler kubeappoperator.Handler
-	eventHandler = new(kubeappoperator.Default)
 
 	kubeconfig := flag.String("kubeconfig", "", "Path to a kube config. Only required if out-of-cluster.")
 	flag.Parse() // Create the client config. Use kubeconfig if given, otherwise assume in-cluster.
@@ -41,7 +40,8 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-
+	eventHandler = new(kubeappoperator.Default)
+	eventHandler.Init(conf, kubeappoperator.GetClientOutOfCluster())
 	apiextensionsclientset, err := apiextensionsclient.NewForConfig(config)
 	if err != nil {
 		panic(err)

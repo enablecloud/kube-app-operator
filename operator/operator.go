@@ -20,13 +20,15 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"reflect"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/derekparker/delve/pkg/config"
 	crv1 "github.com/enablecloud/kube-app-operator/apis/cr/v1"
-	"k8s.io/api/apps/v1beta2"
 	"k8s.io/api/core/v1"
+	extv1beta1 "k8s.io/api/extensions/v1beta1"
 	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -474,11 +476,45 @@ func (d *Default) Init(conf *config.Config, clientb kubernetes.Interface) error 
 func (d *Default) ObjectCreated(obj interface{}) {
 	fmt.Println("Processing change to ObjectCreated %s", obj)
 	//deploymentsClient := d.clientkub.AppsV1beta2().Deployments(v1.NamespaceDefault)
-	_, ok := obj.(crv1.AppFolder)
-	if ok {
-		for i, v := range obj.(crv1.AppFolder).Spec.List.Items {
-			objet := v.Object
+	fmt.Println(reflect.TypeOf(obj))
+	objAppFolder, ok := obj.(*crv1.AppFolder)
+	if ok && objAppFolder != nil && reflect.TypeOf(obj).String() == "*v1.AppFolder" {
+		for i, v := range obj.(*crv1.AppFolder).Spec.List.Items {
 
+			ata, _ := json.Marshal(v)
+			new := extv1beta1.Deployment{}
+			json.Unmarshal(ata, &new)
+			fmt.Println("objet")
+			fmt.Println(d)
+			fmt.Println(d.clientkub)
+			fmt.Println(new.Kind)
+			if strings.Compare(new.Kind, "Deployment") == 0 {
+				deploymentsClient := d.clientkub.ExtensionsV1beta1().Deployments("default")
+				result, err := deploymentsClient.Create(&new)
+				if err != nil {
+					fmt.Printf("Created deployment %q.\n", err)
+					continue
+				}
+				fmt.Printf("Created deployment %q.\n", result.GetObjectMeta().GetName())
+			}
+			/*data, statusok := json.Marshal(v)
+			var objmap map[string]*json.RawMessage
+			json.Unmarshal(data, &objmap)
+			objet := v.Object
+			fmt.Println("objet")
+			fmt.Println("objet")
+			fmt.Println("objet")
+			fmt.Println("objet")
+			fmt.Println("objet")
+			fmt.Println("objet")
+			fmt.Println(v.Raw)
+			fmt.Println(objmap)
+			fmt.Println(objmap["kind"])
+			fmt.Println(data)
+			fmt.Println(statusok)
+			fmt.Println(json.Marshal(v.Raw))
+			fmt.Println(objet)
+			fmt.Println("Deploy %s", objet.GetObjectKind().GroupVersionKind().Kind)
 			if objet.GetObjectKind().GroupVersionKind().Kind == "Deployment" {
 				fmt.Println("YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY")
 				fmt.Println("YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY")
@@ -494,7 +530,7 @@ func (d *Default) ObjectCreated(obj interface{}) {
 					panic(err)
 				}
 				fmt.Printf("Created deployment %q.\n", result.GetObjectMeta().GetName())
-			}
+			}*/
 			fmt.Println("Array Loop", i, v)
 		}
 	}
