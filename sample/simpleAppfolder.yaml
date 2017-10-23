@@ -1,0 +1,28 @@
+apiVersion: cr.kube-app-operator.enablecloud.github.com/v1
+kind: AppFolder
+metadata: 
+    name: test3
+spec:
+    list: 
+        apiVersion: v1
+        kind: List
+        items:
+        - apiVersion: extensions/v1beta1
+          kind: Deployment
+          metadata:
+            name: nginx-deployment
+          spec:
+            replicas: 3
+            template:
+                metadata:
+                  labels:
+                    app: nginx
+                spec:
+                  containers:
+                  - name: nginx
+                    image: nginx:1.7.9
+                    ports:
+                    - containerPort: 80
+       
+        
+        

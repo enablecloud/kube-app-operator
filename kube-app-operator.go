@@ -22,7 +22,6 @@ import (
 
 	"github.com/derekparker/delve/pkg/config"
 	kubeappoperator "github.com/enablecloud/kube-app-operator/operator"
-	"github.com/golang/example/stringutil"
 	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/rest"
@@ -58,7 +57,6 @@ func main() {
 	}
 
 	kubeappoperator.Start(conf, config, eventHandler)
-	fmt.Println(stringutil.Reverse("!selpmaxe oG ,olleH"))
 
 }
 

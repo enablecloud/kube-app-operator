@@ -30,6 +30,7 @@ import (
 	"k8s.io/api/core/v1"
 	extv1beta1 "k8s.io/api/extensions/v1beta1"
 	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
@@ -57,6 +58,7 @@ type Handler interface {
 type Controller struct {
 	clientset    kubernetes.Interface
 	queue        workqueue.RateLimitingInterface
+	deletequeue  workqueue.RateLimitingInterface
 	informer     cache.SharedIndexInformer
 	eventHandler Handler
 }
@@ -116,36 +118,13 @@ func Start(conf *config.Config, cfg *rest.Config, eventHandler Handler) {
 		AppFolderClient: appClient,
 		AppFolderScheme: appScheme,
 	}
-	fmt.Println(controller.AppFolderScheme)
+	fmt.Println(controller.AppFolderScheme.Default)
 	appF := watchAppFolder(kubeClient, appClient, eventHandler)
 	go appF.Run(stopCh)
 	sigterm := make(chan os.Signal, 1)
 	signal.Notify(sigterm, syscall.SIGTERM)
 	signal.Notify(sigterm, syscall.SIGINT)
 	<-sigterm
-
-	//if conf.Resource.Services {
-	//	watchServices(kubeClient, eventHandler)
-	//}
-	//
-	//if conf.Resource.ReplicationController {
-	//	watchReplicationControllers(kubeClient, eventHandler)
-	//}
-	//
-	//if conf.Resource.Deployment {
-	//	watchDeployments(kubeExtensionsClient, eventHandler)
-	//}
-	//
-	//if conf.Resource.Job {
-	//	watchJobs(kubeExtensionsClient, eventHandler)
-	//}
-	//
-	//if conf.Resource.PersistentVolume {
-	//	var servicesStore cache.Store
-	//	servicesStore = watchPersistenVolumes(kubeClient, servicesStore, eventHandler)
-	//}
-
-	//logrus.Fatal(http.ListenAndServe(":8081", nil))
 }
 
 func NewClient(cfg *rest.Config) (*rest.RESTClient, *runtime.Scheme, error) {
@@ -175,7 +154,7 @@ type AppFolderController struct {
 
 func newControllerPod(client kubernetes.Interface, eventHandler Handler) *Controller {
 	queue := workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter())
-
+	deletequeue := workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter())
 	informer := cache.NewSharedIndexInformer(
 		&cache.ListWatch{
 			ListFunc: func(options meta_v1.ListOptions) (runtime.Object, error) {
@@ -193,19 +172,22 @@ func newControllerPod(client kubernetes.Interface, eventHandler Handler) *Contro
 		AddFunc: func(obj interface{}) {
 			key, err := cache.MetaNamespaceKeyFunc(obj)
 			if err == nil {
+				fmt.Println("Create %s ", key)
 				queue.Add(key)
 			}
 		},
 		UpdateFunc: func(old, new interface{}) {
 			key, err := cache.MetaNamespaceKeyFunc(new)
 			if err == nil {
+				fmt.Println("Update %s ", key)
 				queue.Add(key)
 			}
 		},
 		DeleteFunc: func(obj interface{}) {
 			key, err := cache.DeletionHandlingMetaNamespaceKeyFunc(obj)
 			if err == nil {
-				queue.Add(key)
+				fmt.Println("Delete %s ", key)
+				deletequeue.Add(obj)
 			}
 		},
 	})
@@ -214,6 +196,7 @@ func newControllerPod(client kubernetes.Interface, eventHandler Handler) *Contro
 		clientset:    client,
 		informer:     informer,
 		queue:        queue,
+		deletequeue:  deletequeue,
 		eventHandler: eventHandler,
 	}
 }
@@ -251,6 +234,7 @@ func (c *Controller) runWorker() {
 	for c.processNextItem() {
 		// continue looping
 	}
+
 }
 
 func (c *Controller) processNextItem() bool {
@@ -260,7 +244,7 @@ func (c *Controller) processNextItem() bool {
 	}
 	defer c.queue.Done(key)
 
-	err := c.processItem(key.(string))
+	err := c.processItem(key.(string), false)
 	if err == nil {
 		// No error, reset the ratelimit counters
 		c.queue.Forget(key)
@@ -274,19 +258,27 @@ func (c *Controller) processNextItem() bool {
 		utilruntime.HandleError(err)
 	}
 
+	keyD, quitD := c.deletequeue.Get()
+	if quitD {
+		return false
+	}
+	defer c.deletequeue.Done(keyD)
+
+	c.eventHandler.ObjectDeleted(keyD)
+
 	return true
 }
 
-func (c *Controller) processItem(key string) error {
-	fmt.Println("Processing change to Pod %s", key)
+func (c *Controller) processItem(key string, del bool) error {
+	fmt.Println("Processing change to Object %s", key)
 
 	obj, exists, err := c.informer.GetIndexer().GetByKey(key)
 	if err != nil {
 		return fmt.Errorf("Error fetching object with key %s from store: %v", key, err)
 	}
 
-	if !exists {
-		c.eventHandler.ObjectDeleted(obj)
+	if del || !exists {
+		c.eventHandler.ObjectDeleted(key)
 		return nil
 	}
 
@@ -298,10 +290,9 @@ func watchAppFolder(clientkub kubernetes.Interface, client *rest.RESTClient, eve
 
 	//Define what we want to look for (Services)
 	watchlist := cache.NewListWatchFromClient(client, "appfolders", api.NamespaceAll, fields.Everything())
-	fmt.Println("depart")
-	fmt.Println(watchlist)
-	fmt.Println("fin")
+
 	queue := workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter())
+	deletequeue := workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter())
 	//	resyncPeriod := 30 * time.Minute
 
 	//Setup an informer to call functions when the watchlist changes
@@ -315,19 +306,22 @@ func watchAppFolder(clientkub kubernetes.Interface, client *rest.RESTClient, eve
 		AddFunc: func(obj interface{}) {
 			key, err := cache.MetaNamespaceKeyFunc(obj)
 			if err == nil {
+				fmt.Println("Create %s ", key)
 				queue.Add(key)
 			}
 		},
 		UpdateFunc: func(old, new interface{}) {
 			key, err := cache.MetaNamespaceKeyFunc(new)
 			if err == nil {
+				fmt.Println("Update %s ", key)
 				queue.Add(key)
 			}
 		},
 		DeleteFunc: func(obj interface{}) {
 			key, err := cache.DeletionHandlingMetaNamespaceKeyFunc(obj)
 			if err == nil {
-				queue.Add(key)
+				fmt.Println("Delete %s ", key)
+				deletequeue.Add(obj)
 			}
 		},
 	})
@@ -336,126 +330,10 @@ func watchAppFolder(clientkub kubernetes.Interface, client *rest.RESTClient, eve
 		clientset:    clientkub,
 		informer:     informer,
 		queue:        queue,
+		deletequeue:  deletequeue,
 		eventHandler: eventHandler,
 	}
 }
-
-//
-//func watchServices(client *client.Client, eventHandler handlers.Handler) cache.Store {
-//	//Define what we want to look for (Services)
-//	watchlist := cache.NewListWatchFromClient(client, "services", api.NamespaceAll, fields.Everything())
-//
-//	resyncPeriod := 30 * time.Minute
-//
-//	//Setup an informer to call functions when the watchlist changes
-//	eStore, eController := framework.NewInformer(
-//		watchlist,
-//		&api.Service{},
-//		resyncPeriod,
-//		framework.ResourceEventHandlerFuncs{
-//			AddFunc:    eventHandler.ObjectCreated,
-//			DeleteFunc: eventHandler.ObjectDeleted,
-//			UpdateFunc: eventHandler.ObjectUpdated,
-//		},
-//	)
-//
-//	//Run the controller as a goroutine
-//	go eController.Run(wait.NeverStop)
-//
-//	return eStore
-//}
-//
-//func watchReplicationControllers(client *client.Client, eventHandler handlers.Handler) cache.Store {
-//	//Define what we want to look for (ReplicationControllers)
-//	watchlist := cache.NewListWatchFromClient(client, "replicationcontrollers", api.NamespaceAll, fields.Everything())
-//
-//	resyncPeriod := 30 * time.Minute
-//
-//	//Setup an informer to call functions when the watchlist changes
-//	eStore, eController := framework.NewInformer(
-//		watchlist,
-//		&api.ReplicationController{},
-//		resyncPeriod,
-//		framework.ResourceEventHandlerFuncs{
-//			AddFunc:    eventHandler.ObjectCreated,
-//			DeleteFunc: eventHandler.ObjectDeleted,
-//		},
-//	)
-//
-//	//Run the controller as a goroutine
-//	go eController.Run(wait.NeverStop)
-//
-//	return eStore
-//}
-//
-//func watchDeployments(client *client.ExtensionsClient, eventHandler handlers.Handler) cache.Store {
-//	//Define what we want to look for (Deployments)
-//	watchlist := cache.NewListWatchFromClient(client, "deployments", api.NamespaceAll, fields.Everything())
-//
-//	resyncPeriod := 30 * time.Minute
-//
-//	//Setup an informer to call functions when the watchlist changes
-//	eStore, eController := framework.NewInformer(
-//		watchlist,
-//		&v1beta1.Deployment{},
-//		resyncPeriod,
-//		framework.ResourceEventHandlerFuncs{
-//			AddFunc:    eventHandler.ObjectCreated,
-//			DeleteFunc: eventHandler.ObjectDeleted,
-//		},
-//	)
-//
-//	//Run the controller as a goroutine
-//	go eController.Run(wait.NeverStop)
-//
-//	return eStore
-//}
-//
-//func watchJobs(client *client.ExtensionsClient, eventHandler handlers.Handler) cache.Store {
-//	//Define what we want to look for (Jobs)
-//	watchlist := cache.NewListWatchFromClient(client, "jobs", api.NamespaceAll, fields.Everything())
-//
-//	resyncPeriod := 30 * time.Minute
-//
-//	//Setup an informer to call functions when the watchlist changes
-//	eStore, eController := framework.NewInformer(
-//		watchlist,
-//		&v1beta1.Job{},
-//		resyncPeriod,
-//		framework.ResourceEventHandlerFuncs{
-//			AddFunc:    eventHandler.ObjectCreated,
-//			DeleteFunc: eventHandler.ObjectDeleted,
-//		},
-//	)
-//
-//	//Run the controller as a goroutine
-//	go eController.Run(wait.NeverStop)
-//
-//	return eStore
-//}
-//
-//func watchPersistenVolumes(client *client.Client, store cache.Store, eventHandler handlers.Handler) cache.Store {
-//	//Define what we want to look for (PersistenVolumes)
-//	watchlist := cache.NewListWatchFromClient(client, "persistentvolumes", api.NamespaceAll, fields.Everything())
-//
-//	resyncPeriod := 30 * time.Minute
-//
-//	//Setup an informer to call functions when the watchlist changes
-//	eStore, eController := framework.NewInformer(
-//		watchlist,
-//		&api.PersistentVolume{},
-//		resyncPeriod,
-//		framework.ResourceEventHandlerFuncs{
-//			AddFunc:    eventHandler.ObjectCreated,
-//			DeleteFunc: eventHandler.ObjectDeleted,
-//		},
-//	)
-//
-//	//Run the controller as a goroutine
-//	go eController.Run(wait.NeverStop)
-//
-//	return eStore
-//}
 
 // Default handler implements Handler interface,
 // print each event with JSON format
@@ -474,7 +352,7 @@ func (d *Default) Init(conf *config.Config, clientb kubernetes.Interface) error 
 }
 
 func (d *Default) ObjectCreated(obj interface{}) {
-	fmt.Println("Processing change to ObjectCreated %s", obj)
+	fmt.Println("Processing create to ObjectCreated ")
 	//deploymentsClient := d.clientkub.AppsV1beta2().Deployments(v1.NamespaceDefault)
 	fmt.Println(reflect.TypeOf(obj))
 	objAppFolder, ok := obj.(*crv1.AppFolder)
@@ -484,10 +362,6 @@ func (d *Default) ObjectCreated(obj interface{}) {
 			ata, _ := json.Marshal(v)
 			new := extv1beta1.Deployment{}
 			json.Unmarshal(ata, &new)
-			fmt.Println("objet")
-			fmt.Println(d)
-			fmt.Println(d.clientkub)
-			fmt.Println(new.Kind)
 			if strings.Compare(new.Kind, "Deployment") == 0 {
 				deploymentsClient := d.clientkub.ExtensionsV1beta1().Deployments("default")
 				result, err := deploymentsClient.Create(&new)
@@ -495,60 +369,44 @@ func (d *Default) ObjectCreated(obj interface{}) {
 					fmt.Printf("Created deployment %q.\n", err)
 					continue
 				}
-				fmt.Printf("Created deployment %q.\n", result.GetObjectMeta().GetName())
+				fmt.Printf("Created deployment %q.\n", result.GetObjectMeta().GetName(), i)
 			}
-			/*data, statusok := json.Marshal(v)
-			var objmap map[string]*json.RawMessage
-			json.Unmarshal(data, &objmap)
-			objet := v.Object
-			fmt.Println("objet")
-			fmt.Println("objet")
-			fmt.Println("objet")
-			fmt.Println("objet")
-			fmt.Println("objet")
-			fmt.Println("objet")
-			fmt.Println(v.Raw)
-			fmt.Println(objmap)
-			fmt.Println(objmap["kind"])
-			fmt.Println(data)
-			fmt.Println(statusok)
-			fmt.Println(json.Marshal(v.Raw))
-			fmt.Println(objet)
-			fmt.Println("Deploy %s", objet.GetObjectKind().GroupVersionKind().Kind)
-			if objet.GetObjectKind().GroupVersionKind().Kind == "Deployment" {
-				fmt.Println("YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY")
-				fmt.Println("YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY")
-				fmt.Println("YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY")
-				fmt.Println("YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY")
-				deploymentsClient := d.clientkub.AppsV1beta2().Deployments(v1.NamespaceDefault)
-				data, _ := json.Marshal(v)
-				new := v1beta2.Deployment{}
-				err := json.Unmarshal(data, &new)
 
-				result, err := deploymentsClient.Create(&new)
-				if err != nil {
-					panic(err)
-				}
-				fmt.Printf("Created deployment %q.\n", result.GetObjectMeta().GetName())
-			}*/
-			fmt.Println("Array Loop", i, v)
 		}
 	}
-	// index is the index where we are
-	// element is the element from someSlice for where we are
-	//result, err := deploymentsClient.Create(obj.(crv1.AppFolder).Spec.List.Items[0].Object)
-	//if err != nil {
-	//	panic(err)
-	//}
-	//fmt.Printf("Created deployment %q.\n", result.GetObjectMeta().GetName())
 
 }
 
 func (d *Default) ObjectDeleted(obj interface{}) {
 
-	fmt.Println("Processing change to ObjectCreated %s", obj)
+	fmt.Println("Processing remove to ObjectDeleted ")
+	//deploymentsClient := d.clientkub.AppsV1beta2().Deployments(v1.NamespaceDefault)
+	objAppFolder, ok := obj.(*crv1.AppFolder)
+	if ok && objAppFolder != nil && reflect.TypeOf(obj).String() == "*v1.AppFolder" {
+		for i, v := range obj.(*crv1.AppFolder).Spec.List.Items {
+
+			ata, _ := json.Marshal(v)
+			new := extv1beta1.Deployment{}
+			json.Unmarshal(ata, &new)
+			if strings.Compare(new.Kind, "Deployment") == 0 {
+				deploymentsClient := d.clientkub.ExtensionsV1beta1().Deployments("default")
+
+				deletePolicy := meta_v1.DeletePropagationForeground
+
+				err := deploymentsClient.Delete(new.Name, &meta_v1.DeleteOptions{
+					PropagationPolicy: &deletePolicy,
+				})
+				if err != nil {
+					fmt.Printf("Delete deployment %q.\n", err)
+					continue
+				}
+				fmt.Printf("Delete deployment %q.\n", new.Name, i)
+			}
+
+		}
+	}
 }
 
 func (d *Default) ObjectUpdated(oldObj, newObj interface{}) {
-	fmt.Println("Processing change to ObjectCreated %s", newObj)
+	fmt.Println("Processing update to ObjectCreated ")
 }
