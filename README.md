@@ -26,4 +26,4 @@ Server Version: version.Info{Major:"1", Minor:"7", GitVersion:"v1.7.5", GitCommi
     kubectl get deployments
     kubectl get pods
 
-![alt text](/path/to/img.jpg "Title")
+![alt text](https://github.com/enablecloud/kube-app-operator/raw/master/output.gif "Sample")
