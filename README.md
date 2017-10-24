@@ -12,18 +12,18 @@ Client Version: version.Info{Major:"1", Minor:"8", GitVersion:"v1.8.0", GitCommi
 Server Version: version.Info{Major:"1", Minor:"7", GitVersion:"v1.7.5", GitCommit:"17d7182a7ccbb167074be7a87f0a68bd00d58d97", GitTreeState:"clean", BuildDate:"2017-10-06T20:53:14Z", GoVersion:"go1.8.3", Compiler:"gc", Platform:"linux/amd64"}
 
 ## Command to test
-<code>
-./kube-app-operator --kubeconfig=$HOME/.kube/config &
-kubectl get customresourcedefinition
-kubectl describe customresourcedefinition appfolders.cr.kube-app-operator.enablecloud.github.com
-cat sample/simpleAppfolder.yaml
-kubectl get deployments
-kubectl get pods
-kubectl create -f sample/simpleAppfolder.yaml
-kubectl get deployments
-kubectl get pods
-kubectl delete appFolder test3
-kubectl get deployments
-kubectl get pods
-&lt;blink&gt;</code>
+
+    ./kube-app-operator --kubeconfig=$HOME/.kube/config &
+    kubectl get customresourcedefinition
+    kubectl describe customresourcedefinition appfolders.cr.kube-app-operator.enablecloud.github.com
+    cat sample/simpleAppfolder.yaml
+    kubectl get deployments
+    kubectl get pods
+    kubectl create -f sample/simpleAppfolder.yaml
+    kubectl get deployments
+    kubectl get pods
+    kubectl delete appFolder test3
+    kubectl get deployments
+    kubectl get pods
+
 ![alt text](/path/to/img.jpg "Title")
